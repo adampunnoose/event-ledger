@@ -458,36 +458,49 @@ This section tracks implementation progress for each phase.
 ---
 
 ### Phase 4: Account Service — Core
-**Status**: Not Started
+**Status**: ✅ Completed (2026-07-14)
 
 **Completed**:
-- [ ] `Account` / `Transaction` entities + repositories
-- [ ] `applyTransaction` with idempotency + running-balance update (`BigDecimal`)
-- [ ] Balance + account-details endpoints
-- [ ] Validation → 400
+- [x] `Account` / `Transaction` entities + repositories
+- [x] `applyTransaction` with idempotency + running-balance update (`BigDecimal`)
+- [x] Balance + account-details endpoints
+- [x] Validation → 400
 
 **Remaining**:
-- All items pending
+- None
 
 **Implementation Notes**:
-- Duplicate `eventId` → `duplicate=true`, balance unchanged (retry-safe).
+- **Files**: `entity/{Account,Transaction,TxType}`, `repository/{AccountRepository,TransactionRepository}`, `model/{ApplyTransactionRequest,ApplyTransactionResponse,BalanceResponse,AccountDetailsResponse,TransactionView,ErrorResponse}`, `service/AccountService`, `api/{AccountController,GlobalExceptionHandler}`, `exception/NotFoundException`.
+- **Idempotency**: `findByEventId` → duplicate returns `{applied:true, duplicate:true}` with current balance (HTTP 200), no re-apply. New apply → HTTP 201.
+- **FK ordering**: account upserted via `saveAndFlush` *before* the transaction insert, so `transactions.account_id` FK is satisfied on auto-created accounts.
+- **Balance**: running total on `accounts`, signed `BigDecimal` (CREDIT `+`, DEBIT `−`), scale 4.
+- **Validation**: `@Pattern(CREDIT|DEBIT)` + `@Positive` amount + `@NotBlank/@NotNull` → 400 via `GlobalExceptionHandler`; also handles malformed JSON and `NotFoundException` (404).
+- Added `spring-boot-starter-validation` (not transitive from starter-web).
+- **Verified** (curl): apply→201, duplicate→200 (balance unchanged), balance = 150−50 = 100.0000, bad amount→400, unknown type→400, account details returns recent transactions.
 
 ---
 
 ### Phase 5: Event Gateway — Core
-**Status**: Not Started
+**Status**: ✅ Completed (2026-07-14)
 
 **Completed**:
-- [ ] `Event` entity + repository (ordered listing)
-- [ ] `POST /events` (validate → idempotency → persist → WebClient apply)
-- [ ] `GET /events/{id}` + `GET /events?account=` (local reads)
-- [ ] `AccountClient` (WebClient)
+- [x] `Event` entity + repository (ordered listing)
+- [x] `POST /events` (validate → idempotency → persist → WebClient apply)
+- [x] `GET /events/{id}` + `GET /events?account=` (local reads)
+- [x] `AccountClient` (WebClient)
 
 **Remaining**:
-- All items pending
+- None
 
 **Implementation Notes**:
-- Resiliency/`503` behavior deferred to Phase 6; here happy-path + basic error only.
+- **Files**: `entity/{Event,EventStatus,TransactionType}`, `repository/EventRepository`, `model/{SubmitEventRequest,EventResponse,ErrorResponse}`, `client/{AccountClient,AccountApplyRequest,AccountApplyResult}`, `service/{EventService,EventMapper,SubmitResult}`, `api/{EventController,GlobalExceptionHandler}`, `exception/{NotFoundException,AccountServiceUnavailableException}`.
+- **Idempotency**: `eventId` PK; duplicate returns the original stored event (HTTP 200), new → 201. Concurrent-duplicate race caught via `DataIntegrityViolationException` → returns the winner.
+- **No method-level `@Transactional` on submit** — event is persisted (RECEIVED) and committed *before* the downstream call, so a failed apply still leaves a durable FAILED record (graceful degradation + replay).
+- **`AccountClient`** uses the `accountServiceWebClient` bean; plain `.block()` for now (Resilience4j wrapping is Phase 6).
+- **Metadata** accepted as opaque `JsonNode`, stored as raw JSON string, round-tripped on read; **not** forwarded to the Account Service.
+- **Basic error handling** (full resiliency is Phase 6): apply failure → event set FAILED, `AccountServiceUnavailableException` → HTTP 503.
+- **Verified** (curl): submit→201 APPLIED, duplicate→200, **out-of-order** (submit 16:00 then 10:00 → listing returns 10:00 first, balance correct = 100.0000 regardless of order), GET by id 200/404, and **graceful degradation** (Account Service stopped → POST 503 with event stored FAILED, GET by-id/list still 200, Gateway `/health` still UP).
+- **Known minor**: fresh-write response shows submitted scale (`150.00`) while DB-read responses show column scale (`150.0000`) — same value, cosmetic; can normalize scale on output later if desired.
 
 ---
 
