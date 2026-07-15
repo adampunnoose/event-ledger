@@ -573,19 +573,31 @@ This section tracks implementation progress for each phase.
 ---
 
 ### Phase 9: Automated Tests
-**Status**: Not Started
+**Status**: ✅ Completed (2026-07-15)
 
 **Completed**:
-- [ ] Component tests (idempotency, out-of-order, balance, validation)
-- [ ] Resiliency test (breaker opens, fast 503)
-- [ ] Trace-propagation test (`traceparent` received)
-- [ ] One real E2E (Testcontainers)
+- [x] Component tests (idempotency, out-of-order, balance, validation)
+- [x] Resiliency test (breaker opens, fast 503, timeout, graceful degradation)
+- [x] Trace-propagation test (same traceId Gateway → Account)
+- [x] One real E2E (Testcontainers, full flow across real containers)
 
 **Remaining**:
-- All items pending
+- None.
+
+**Test suite (28 tests total):**
+- **`AccountApiTest`** (12, `mvn test`) — `@SpringBootTest`+MockMvc against real H2: credit/debit net balance, idempotent duplicate, out-of-order commutativity, **BigDecimal precision (0.10+0.20=0.30, no float drift)**, unknown account → 404, and a **parameterized validation sweep** (negative amount, zero amount, unknown type, missing eventId, missing currency, missing eventTimestamp, malformed JSON) → 400.
+- **`EventApiTest`** (11, `mvn test`) — Gateway with WireMock-stubbed Account Service: happy path 201/APPLIED, duplicate → 200 original + not re-forwarded, invalid amount → 400 (no downstream call), listing ordered by `eventTimestamp` (not arrival), unknown event → 404, and a **parameterized validation sweep** (zero amount, unknown type, missing eventId/accountId/eventTimestamp, malformed JSON) → 400 **and never forwarded downstream**.
+- **`ResiliencyTest`** (4, `mvn test`) — WireMock failure injection: 500 → 503 + event stored FAILED + local read still 200; **retries are bounded** (single failing POST → exactly `max-attempts` downstream calls); slow response (>timeout) → 503; repeated failures **open the breaker** then fast-fail without calling downstream (asserts breaker state OPEN + no new WireMock calls).
+- **`FullFlowIT`** (1, `mvn verify`) — **both services as real containers** on a shared network (Testcontainers, `ImageFromDockerfile`): submit → 201 APPLIED, balance actually updates on the Account Service, and the Gateway's `traceId` appears in the Account container's logs (real cross-process trace propagation). `disabledWithoutDocker = true`.
+
+**Coverage additions from a Codex review of Phase 9** (3 of 5 findings actioned): bounded-retry assertion, validation edge cases (zero amount / missing fields / malformed body), and a BigDecimal-precision test. Two findings not actioned: the E2E stays in `mvn verify` (standard surefire/failsafe split — README calls out `mvn verify` for the full suite); a component-level `traceparent` header assertion is infeasible in the in-JVM harness (documented above) so it lives in the two-container E2E instead.
 
 **Implementation Notes**:
-- `mvn test` must be hermetic (WireMock stubs peer; Testcontainers manages the real one).
+- **Deps** (gateway): `org.wiremock:wiremock-standalone:3.9.2`, `org.testcontainers:junit-jupiter` (BOM-managed) + `maven-failsafe-plugin` (so `*IT` runs in `mvn verify`, keeping `mvn test` fast).
+- **Test resilience timings** tightened via `src/test/resources/application-test.yml` + `@ActiveProfiles("test")` (400ms timeout, 2 retries, small breaker window) for fast, deterministic resiliency tests.
+- **Trace-propagation testing — key finding**: the in-JVM `@SpringBootTest` harness does **not** reproduce `traceparent` injection (the blocking→reactive-Netty context propagation doesn't carry the trace to the outbound WebClient thread in-process), even though the **real running app does propagate** (re-confirmed manually). So the trace assertion lives in the **two-container E2E**, where the Gateway is a real process — the only faithful reproduction. Attempts that did *not* fix the in-JVM case: `RANDOM_PORT`+`TestRestTemplate`, direct `AccountClient` call with an explicit span, `Hooks.enableAutomaticContextPropagation()`.
+- **Production changes made while investigating (kept — correct hygiene)**: `WebClientConfig` now wires `ObservationRegistry` explicitly into the builder; `application.yml` sets `spring.reactor.context-propagation: auto`.
+- **Verified**: `mvn test` → 14 green (6 account + 8 gateway); `mvn verify` → +1 E2E green (~2 min for the in-test image builds).
 
 ---
 

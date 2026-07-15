@@ -5,6 +5,11 @@ spring:
   application:
     name: event-gateway
 
+  # Propagate trace context across the blocking → reactive (WebClient/Netty) boundary,
+  # so the outbound Account Service call carries the traceparent header.
+  reactor:
+    context-propagation: auto
+
   # Present both spring-web (servlet) and spring-webflux (for WebClient). With both
   # on the classpath Spring Boot starts as a servlet (Tomcat) app; WebClient is used
   # only for the outbound Account Service call.

@@ -1,0 +1,20 @@
+# Test overrides (activated by @ActiveProfiles("test")). Tightens resilience timings
+# so the circuit-breaker / timeout / retry tests run fast and deterministically.
+account-service:
+  call-timeout: 400ms
+
+resilience4j:
+  retry:
+    instances:
+      accountService:
+        max-attempts: 2
+        wait-duration: 20ms
+        enable-exponential-backoff: false
+  circuitbreaker:
+    instances:
+      accountService:
+        sliding-window-size: 4
+        minimum-number-of-calls: 3
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 500ms
+        permitted-number-of-calls-in-half-open-state: 2

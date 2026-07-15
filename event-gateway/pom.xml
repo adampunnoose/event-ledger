@@ -92,6 +92,19 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Stub the Account Service in component tests (simulate failures, delays, inspect headers). -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.9.2</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Real cross-process E2E: run the actual Account Service container (mvn verify). -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -107,6 +120,20 @@
                         </exclude>
                     </excludes>
                 </configuration>
+            </plugin>
+            <!-- Failsafe runs *IT tests (the Testcontainers E2E) in `mvn verify`,
+                 keeping `mvn test` fast (component tests only). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
