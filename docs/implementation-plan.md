@@ -13,14 +13,14 @@ The two services **share no database and no in-process state**. The only channel
 
 These were settled during the design discussion; the rationale lives in the README's "Design Decisions" section.
 
-- **Monorepo, two independent Maven modules** — `event-gateway/` and `account-service/` each have their own `pom.xml`, dependencies, H2 database, `mvn test`, and Dockerfile. **No shared code module** — a shared DTO/entity jar would recreate the coupling the exercise is testing against. If both need an `EventDto`, each defines its own (contract is REST/JSON, not shared types).
+- **Monorepo, two independent Maven modules** — `event-gateway/` and `account-service/` each have their own `pom.xml`, dependencies, H2 database, `mvn test`, and Dockerfile. 
 - **Database per service** — Gateway owns `events`; Account Service owns `accounts` + `transactions`. Each is embedded H2 (in-memory). This is what makes graceful degradation meaningful: Gateway reads hit local data and keep working; balance reads require the Account Service and fail cleanly when it's down.
 - **`BigDecimal` end-to-end for money** — entity, DTO, and arithmetic. Jackson configured with `USE_BIG_DECIMAL_FOR_FLOATS` so JSON numbers never pass through `double`. Scale pinned to 4, `RoundingMode.HALF_EVEN`.
 - **`WebClient` for the Gateway→Account call (never `RestTemplate`)** — see [Design Decision: WebClient in an MVC app](#design-decision-webclient-in-an-mvc-app).
 - **Idempotency enforced at BOTH layers** — Gateway keys on `eventId` (primary key). The Account Service *also* treats `eventId` as a unique idempotency key on `transactions`. This is not redundant: the resiliency **retry** can re-send the same transaction, and account-side idempotency is what stops a retry from double-applying a balance change.
 - **Out-of-order handling falls out of the math** — balance = Σ CREDIT − Σ DEBIT is **commutative**, so arrival order never affects the balance as long as we *sum* rather than track a sequence-dependent running total on the wire. The only order-sensitive surface is the listing endpoint, solved with `ORDER BY event_timestamp`.
 - **Event status lifecycle** — each event carries `RECEIVED → APPLIED | FAILED`. This is what powers graceful degradation (persist locally even when the apply fails) and sets up the async-fallback bonus (replay non-`APPLIED` events on recovery).
-- **Resiliency: circuit breaker + timeout + bounded retry w/ backoff** on the Gateway→Account call. Bulkhead is *described* in the README as a considered-and-deferred option rather than built (it needs a concurrency test to demo convincingly). See [Phase 6](#phase-6-resiliency--graceful-degradation).
+- **Resiliency: circuit breaker + timeout + bounded retry w/ backoff** on the Gateway→Account call. See [Phase 6](#phase-6-resiliency--graceful-degradation).
 - **Tracing: W3C Trace Context (`traceparent`)** via Micrometer Tracing → OpenTelemetry bridge, with trace/span IDs pushed to SLF4J MDC so both services log the same `traceId`.
 - **No corrections/reversals feature** — the spec's "out-of-order tolerance" is about arrival order, not amending past events. A DEBIT is how you offset a CREDIT. Noted in README; not built.
 
@@ -117,7 +117,7 @@ Status-code map:
 ### 1.2 Trace Propagation Contract
 
 - Propagation format: **W3C Trace Context** — header `traceparent` (and `tracestate` if present).
-- Gateway generates a trace ID for every inbound request that lacks one.
+- Gateway generates a trace ID for each incoming request (continuing an inbound `traceparent` if one is already present — the OTel-idiomatic behavior).
 - `WebClient` auto-injects `traceparent` on the outbound call; Account Service auto-extracts and continues the same trace.
 - Both services log `traceId` (and `spanId`) on every log line via MDC.
 
@@ -232,7 +232,7 @@ CREATE TABLE accounts (
 CREATE TABLE transactions (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     event_id        VARCHAR(100)  NOT NULL UNIQUE,    -- idempotency key from Gateway
-    account_id      VARCHAR(100)  NOT NULL,
+    account_id      VARCHAR(100)  NOT NULL REFERENCES accounts(account_id),  -- FK: no orphaned transactions
     type            VARCHAR(10)   NOT NULL,
     amount          DECIMAL(19,4) NOT NULL,
     currency        VARCHAR(3)    NOT NULL,
@@ -243,6 +243,8 @@ CREATE INDEX idx_tx_account_ts ON transactions (account_id, event_timestamp);
 ```
 
 **Balance strategy:** store a running `balance` on `accounts`, updated within the same transaction that inserts the `transactions` row, guarded by the `event_id` unique constraint (duplicate → no-op). Because the sum is commutative, the running total is correct regardless of arrival order. (A `SELECT SUM(...)` recompute is the fallback/verification path.)
+
+**FK + auto-create ordering:** `transactions.account_id` is a foreign key to `accounts(account_id)` — no orphaned transactions can exist. Since accounts are auto-created on first transaction, `applyTransaction` must, within its single `@Transactional` unit, **upsert the account first, then insert the transaction**, so the account row exists before the FK is checked. The existing `idx_tx_account_ts (account_id, ...)` index already serves FK lookups, so no separate FK index is needed. *(Note the asymmetry: the Gateway's `events.account_id` is deliberately **not** a FK — the Gateway owns no `accounts` table, and you can't reference across a service boundary.)*
 
 ### 1.7 Entities
 
