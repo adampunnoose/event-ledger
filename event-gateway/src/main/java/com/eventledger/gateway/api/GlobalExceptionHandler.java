@@ -1,10 +1,14 @@
 package com.eventledger.gateway.api;
 
 import com.eventledger.gateway.exception.AccountServiceUnavailableException;
+import com.eventledger.gateway.exception.EventRejectedException;
 import com.eventledger.gateway.exception.NotFoundException;
 import com.eventledger.gateway.model.DegradedResponse;
 import com.eventledger.gateway.model.ErrorResponse;
+import com.eventledger.gateway.model.RejectionResponse;
 import com.eventledger.gateway.service.EventMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
@@ -21,10 +25,13 @@ public class GlobalExceptionHandler {
 
     private final MeterRegistry meterRegistry;
     private final EventMapper eventMapper;
+    private final ObjectMapper objectMapper;
 
-    public GlobalExceptionHandler(MeterRegistry meterRegistry, EventMapper eventMapper) {
+    public GlobalExceptionHandler(MeterRegistry meterRegistry, EventMapper eventMapper,
+                                  ObjectMapper objectMapper) {
         this.meterRegistry = meterRegistry;
         this.eventMapper = eventMapper;
+        this.objectMapper = objectMapper;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -57,6 +64,28 @@ public class GlobalExceptionHandler {
                 MDC.get("traceId"),
                 Instant.now().toString());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(body);
+    }
+
+    @ExceptionHandler(EventRejectedException.class)
+    public ResponseEntity<RejectionResponse> handleRejected(EventRejectedException ex) {
+        // Pass the Account Service's error through (fall back to a generic message).
+        String error = "TRANSACTION_REJECTED";
+        String message = "Account Service rejected the transaction";
+        try {
+            JsonNode node = objectMapper.readTree(ex.getDownstreamBody());
+            if (node.hasNonNull("error")) {
+                error = node.get("error").asText();
+            }
+            if (node.hasNonNull("message")) {
+                message = node.get("message").asText();
+            }
+        } catch (Exception ignored) {
+            // downstream body wasn't the expected JSON envelope — keep the defaults
+        }
+        RejectionResponse body = new RejectionResponse(
+                error, message, eventMapper.toResponse(ex.getEvent()),
+                MDC.get("traceId"), Instant.now().toString());
+        return ResponseEntity.status(ex.getStatus()).body(body);
     }
 
     @ExceptionHandler(Exception.class)

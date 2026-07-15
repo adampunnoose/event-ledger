@@ -602,17 +602,21 @@ This section tracks implementation progress for each phase.
 ---
 
 ### Phase 10: README
-**Status**: Not Started
+**Status**: ✅ Completed (2026-07-15)
 
 **Completed**:
-- [ ] Architecture + setup + run + test sections
-- [ ] Resiliency rationale + design-decisions section
+- [x] Architecture overview (diagram + both services + how they interact)
+- [x] Setup / prerequisites + how to start both services (Docker Compose + manual)
+- [x] How to run the tests (`mvn test` / `mvn verify`, with coverage summary)
+- [x] Resiliency rationale (circuit breaker primary; timeout + bounded retry; bulkhead deferred) + graceful-degradation matrix
+- [x] Design-decisions section, API reference, try-it-out curl examples, observability
 
 **Remaining**:
-- All items pending
+- None.
 
 **Implementation Notes**:
-- Keep commit history meaningful per submission rules.
+- `README.md` maps 1:1 to assignment §9 (architecture, setup, run, tests, resiliency rationale) and adds an API reference, worked curl examples, observability, and design decisions for the walkthrough.
+- Assignment/study-guide files kept out of the public repo via `.gitignore`.
 
 ---
 

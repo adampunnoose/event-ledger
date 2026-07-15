@@ -4,6 +4,8 @@ import com.eventledger.gateway.client.AccountClient;
 import com.eventledger.gateway.entity.Event;
 import com.eventledger.gateway.entity.EventStatus;
 import com.eventledger.gateway.exception.AccountServiceUnavailableException;
+import com.eventledger.gateway.exception.DownstreamRejectedException;
+import com.eventledger.gateway.exception.EventRejectedException;
 import com.eventledger.gateway.exception.NotFoundException;
 import com.eventledger.gateway.model.SubmitEventRequest;
 import com.eventledger.gateway.repository.EventRepository;
@@ -80,6 +82,14 @@ public class EventService {
             log.info("Applied event {} for account {}", event.getEventId(), event.getAccountId());
             count(newlyCreated ? "created" : "duplicate");
             return new SubmitResult(event, newlyCreated);
+        } catch (DownstreamRejectedException rejected) {
+            // Permanent client error (e.g. currency mismatch) — not a degradation.
+            event.setStatus(EventStatus.REJECTED);
+            eventRepository.save(event);
+            log.warn("Account Service rejected event {} (status {}): {}",
+                    event.getEventId(), rejected.getStatus(), rejected.getBody());
+            count("rejected");
+            throw new EventRejectedException(event, rejected.getStatus(), rejected.getBody());
         } catch (Exception ex) {
             event.setStatus(EventStatus.FAILED);
             eventRepository.save(event);

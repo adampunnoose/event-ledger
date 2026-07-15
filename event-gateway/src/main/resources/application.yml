@@ -65,6 +65,9 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 2
         automatic-transition-from-open-to-half-open-enabled: true
         register-health-indicator: true
+        ignore-exceptions:
+          # A downstream client-error (4xx) is not an availability failure — don't trip the breaker.
+          - com.eventledger.gateway.exception.DownstreamRejectedException
   retry:
     instances:
       accountService:
@@ -77,6 +80,8 @@ resilience4j:
         ignore-exceptions:
           # Don't waste retries when the breaker is already open — fail fast instead.
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          # Nor on a permanent 4xx client error — retrying can't help.
+          - com.eventledger.gateway.exception.DownstreamRejectedException
 
 management:
   tracing:
