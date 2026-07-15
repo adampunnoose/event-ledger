@@ -3,6 +3,7 @@ package com.eventledger.gateway.api;
 import com.eventledger.gateway.exception.AccountServiceUnavailableException;
 import com.eventledger.gateway.exception.NotFoundException;
 import com.eventledger.gateway.model.ErrorResponse;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,17 +17,25 @@ import java.time.Instant;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    private final MeterRegistry meterRegistry;
+
+    public GlobalExceptionHandler(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
         String message = ex.getBindingResult().getFieldErrors().stream()
                 .findFirst()
                 .map(fe -> fe.getField() + " " + fe.getDefaultMessage())
                 .orElse("Validation failed");
+        meterRegistry.counter("gateway.events.submitted", "result", "rejected").increment();
         return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", message);
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ErrorResponse> handleUnreadable(HttpMessageNotReadableException ex) {
+        meterRegistry.counter("gateway.events.submitted", "result", "rejected").increment();
         return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Malformed or unparseable request body");
     }
 

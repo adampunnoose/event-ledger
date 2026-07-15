@@ -31,6 +31,15 @@ spring:
     deserialization:
       use-big-decimal-for-floats: true   # money never passes through double
 
+# Structured JSON logs (ECS): @timestamp, log.level, service.name, trace.id, span.id, message.
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        name: event-gateway
+
 # Account Service location — overridden by env (ACCOUNT_SERVICE_BASE_URL) under Docker.
 account-service:
   base-url: ${ACCOUNT_SERVICE_BASE_URL:http://localhost:8081}
@@ -65,6 +74,9 @@ resilience4j:
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
 
 management:
+  tracing:
+    sampling:
+      probability: 1.0                   # trace every request (demo — see full path)
   endpoints:
     web:
       exposure:

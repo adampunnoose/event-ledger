@@ -7,7 +7,7 @@ import com.eventledger.gateway.exception.AccountServiceUnavailableException;
 import com.eventledger.gateway.exception.NotFoundException;
 import com.eventledger.gateway.model.SubmitEventRequest;
 import com.eventledger.gateway.repository.EventRepository;
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -17,13 +17,24 @@ import java.util.List;
 import java.util.Optional;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class EventService {
+
+    /** Custom metric: submissions by outcome. Prometheus: gateway_events_submitted_total{result=...}. */
+    private static final String METRIC = "gateway.events.submitted";
 
     private final EventRepository eventRepository;
     private final AccountClient accountClient;
     private final EventMapper eventMapper;
+    private final MeterRegistry meterRegistry;
+
+    public EventService(EventRepository eventRepository, AccountClient accountClient,
+                        EventMapper eventMapper, MeterRegistry meterRegistry) {
+        this.eventRepository = eventRepository;
+        this.accountClient = accountClient;
+        this.eventMapper = eventMapper;
+        this.meterRegistry = meterRegistry;
+    }
 
     public SubmitResult submitEvent(SubmitEventRequest request) {
         // Idempotency: same eventId already seen → return the original, no re-apply.
@@ -31,6 +42,7 @@ public class EventService {
         if (existing.isPresent()) {
             log.info("Duplicate submission eventId={} — returning stored event (status={})",
                     request.getEventId(), existing.get().getStatus());
+            count("duplicate");
             return new SubmitResult(existing.get(), false);
         }
 
@@ -41,6 +53,7 @@ public class EventService {
             // Concurrent duplicate: another thread inserted the same eventId first.
             Event winner = eventRepository.findById(request.getEventId())
                     .orElseThrow(() -> race);
+            count("duplicate");
             return new SubmitResult(winner, false);
         }
 
@@ -50,14 +63,20 @@ public class EventService {
             event.setStatus(EventStatus.APPLIED);
             eventRepository.save(event);
             log.info("Applied event {} for account {}", event.getEventId(), event.getAccountId());
+            count("created");
             return new SubmitResult(event, true);
         } catch (Exception ex) {
             event.setStatus(EventStatus.FAILED);
             eventRepository.save(event);
             log.warn("Account Service apply failed for event {} — stored as FAILED: {}",
                     event.getEventId(), ex.toString());
+            count("degraded");
             throw new AccountServiceUnavailableException(event.getEventId(), ex);
         }
+    }
+
+    private void count(String result) {
+        meterRegistry.counter(METRIC, "result", result).increment();
     }
 
     public Event getEvent(String eventId) {

@@ -11,7 +11,7 @@ import com.eventledger.account.model.BalanceResponse;
 import com.eventledger.account.model.TransactionView;
 import com.eventledger.account.repository.AccountRepository;
 import com.eventledger.account.repository.TransactionRepository;
-import lombok.RequiredArgsConstructor;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,14 +22,25 @@ import java.util.List;
 import java.util.Optional;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class AccountService {
 
     private static final int SCALE = 4;
 
+    /** Custom metric. Prometheus: account_transactions_applied_total{outcome=...}. */
+    private static final String METRIC = "account.transactions.applied";
+
     private final AccountRepository accountRepository;
     private final TransactionRepository transactionRepository;
+    private final MeterRegistry meterRegistry;
+
+    public AccountService(AccountRepository accountRepository,
+                          TransactionRepository transactionRepository,
+                          MeterRegistry meterRegistry) {
+        this.accountRepository = accountRepository;
+        this.transactionRepository = transactionRepository;
+        this.meterRegistry = meterRegistry;
+    }
 
     /**
      * Apply a transaction to an account, idempotently on {@code eventId}.
@@ -47,6 +58,7 @@ public class AccountService {
                     .orElseThrow(() -> new IllegalStateException(
                             "Account missing for existing transaction " + request.getEventId()));
             log.info("Duplicate transaction eventId={} — no-op, balance unchanged", request.getEventId());
+            meterRegistry.counter(METRIC, "outcome", "duplicate").increment();
             return toResponse(account, request.getEventId(), true, true);
         }
 
@@ -81,6 +93,7 @@ public class AccountService {
 
         log.info("Applied {} {} {} to account={} — new balance={}",
                 type, request.getAmount(), request.getCurrency(), accountId, account.getBalance());
+        meterRegistry.counter(METRIC, "outcome", "applied").increment();
         return toResponse(account, request.getEventId(), true, false);
     }
 

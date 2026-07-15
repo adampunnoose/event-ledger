@@ -25,7 +25,19 @@ spring:
     deserialization:
       use-big-decimal-for-floats: true   # money never passes through double
 
+# Structured JSON logs (ECS): @timestamp, log.level, service.name, trace.id, span.id, message.
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        name: account-service
+
 management:
+  tracing:
+    sampling:
+      probability: 1.0                   # trace every request (demo — see full path)
   endpoints:
     web:
       exposure:

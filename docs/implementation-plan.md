@@ -529,19 +529,24 @@ This section tracks implementation progress for each phase.
 ---
 
 ### Phase 7: Observability & Distributed Tracing
-**Status**: Not Started
+**Status**: ✅ Completed (2026-07-14)
 
 **Completed**:
-- [ ] Micrometer Tracing + OTel bridge on both services
-- [ ] Structured JSON logging with `traceId`/`spanId`
-- [ ] `/health` DB diagnostics confirmed
-- [ ] Custom metric `gateway_events_submitted_total` + `/actuator/prometheus`
+- [x] Micrometer Tracing + OTel bridge on both services
+- [x] Structured JSON logging with `traceId`/`spanId`
+- [x] `/health` DB diagnostics confirmed
+- [x] Custom metric `gateway_events_submitted_total` + `/actuator/prometheus`
 
 **Remaining**:
-- All items pending
+- None (optional Jaeger/Zipkin *visualization* is a Phase 8 bonus — an OTLP exporter block in Compose).
 
 **Implementation Notes**:
-- Verify one request → single trace across both services (logs + optional Jaeger).
+- **Deps** (both services): `io.micrometer:micrometer-tracing-bridge-otel` (trace context + W3C `traceparent` propagation), `io.micrometer:micrometer-registry-prometheus` (Prometheus endpoint).
+- **Tracing**: `management.tracing.sampling.probability: 1.0` (trace every request for the demo). The Boot-provided `WebClient.Builder` (used in `WebClientConfig`) is auto-instrumented, so the Gateway injects `traceparent` on the outbound call and the Account Service auto-extracts it — no manual header code. No span *exporter* configured (logs-only); the OTLP exporter → Jaeger is the Phase 8 bonus.
+- **Structured logging**: Spring Boot 3.4 native structured logging, `logging.structured.format.console: ecs`. Fields: `@timestamp`, `log.level`, `service.name`, `traceId`, `spanId`, `message`, `log.logger`. `service.name` set per module.
+- **Custom metrics**: Gateway `gateway.events.submitted{result=created|duplicate|rejected|degraded}` (in `EventService` + validation handler); Account `account.transactions.applied{outcome=applied|duplicate}` (in `AccountService`). Both exposed at `/actuator/prometheus`. (Switched both service beans from Lombok `@RequiredArgsConstructor` to explicit constructors to inject `MeterRegistry`.)
+- **Verified** (curl + log inspection): one `POST /events` produced **the same `traceId` in both services' logs** (`event-gateway` parent span → `account-service` child span), proving cross-service propagation. Prometheus showed `gateway_events_submitted_total{result="created"} 2, {result="duplicate"} 1, {result="rejected"} 1` and `account_transactions_applied_total{outcome="applied"} 2`. Both `/actuator/prometheus` → 200.
+- **Note**: the ECS log field for the trace is flat `traceId`/`spanId` (populated from Micrometer's MDC), not nested `trace.id` — still valid JSON carrying the trace ID as the spec requires.
 
 ---
 
