@@ -631,6 +631,34 @@ This section tracks implementation progress for each phase.
 
 ---
 
+## Addendum: Post-Review Bug Fixes (2026-07-15)
+
+After Phases 1–9, a **Codex review of the Phase 1–8 code** surfaced four correctness/consistency gaps — notably two where the code diverged from this plan's own contracts. All four were fixed and verified at runtime. (Two other review findings were declined: keeping the E2E in `mvn verify` per the surefire/failsafe convention, and the infeasibility of a component-level `traceparent` assertion in the in-JVM harness — both discussed in the Phase 9 notes.)
+
+### Fix 1 — Reconcile non-`APPLIED` events on resubmission *(High)*
+**Problem**: a timed-out apply marked the event `FAILED`, but every duplicate submission was short-circuited, so if the Account Service had actually applied the transaction the Gateway reported `FAILED` forever — contradicting §1.8.
+**Fix** (`EventService`): duplicates of an `APPLIED` event still short-circuit (200, no downstream call); duplicates of a `RECEIVED`/`FAILED` event **re-attempt the apply** (`applyDownstream`) to reconcile — safe because the Account Service is idempotent on `eventId`, so it cannot double-apply.
+**Verified**: outage → `FAILED` + 503; after recovery, resubmit → **200 `APPLIED`**, balance applied **exactly once**.
+
+### Fix 2 — Race-safe account-side idempotency *(High)*
+**Problem**: `AccountService` did a read-then-insert with no handler, so under concurrent retries the loser on the unique `event_id` insert surfaced as a **500** (which the Gateway then misread as a degradation) instead of the contracted duplicate 200 (§1.4). The study guide already *claimed* this was handled; the code didn't.
+**Fix** (`AccountService`): the transactional apply is invoked through the proxy (`@Lazy` self-reference); `transactionRepository.saveAndFlush(...)` forces the insert so a duplicate throws **within** the unit of work and rolls back the balance change; the caller catches `DataIntegrityViolationException`, re-reads by `eventId`, and returns `duplicate=true`.
+**Verified**: sequential idempotency unchanged (200, balance stable); the rollback-on-conflict is what keeps Fix 1's replay from double-applying.
+
+### Fix 3 — Enforce single-currency-per-account *(Medium)*
+**Problem**: a USD account silently absorbed an EUR transaction into the same balance (assumption documented but not enforced).
+**Fix** (`AccountService.requireSameCurrency` + `CurrencyMismatchException`): a transaction whose currency differs from the account's is rejected with **HTTP 409 `CURRENCY_MISMATCH`**.
+**Verified**: EUR into a USD account → `409`.
+
+### Fix 4 — 503 body includes the stored event *(Low)*
+**Problem**: §1.3 says the degraded `POST /events` response returns the stored event + error; the handler returned only a bare error envelope.
+**Fix** (`DegradedResponse` + Gateway `GlobalExceptionHandler`): the 503 body now carries the error envelope **plus the stored event** (status `FAILED`).
+**Verified**: 503 body contains the full event object.
+
+**Regression check**: all 27 component tests (`mvn test`) still green after the changes; no new test classes added (per direction), behaviors confirmed via runtime smoke tests.
+
+---
+
 ## Known Issues / Blockers
 *(None yet)*
 
@@ -645,15 +673,16 @@ This section tracks implementation progress for each phase.
 
 ### Medium Priority
 1. **Out-of-order correctness** — commutative sum for balance; `ORDER BY event_timestamp` for listing.
-2. **Event stuck un-applied after transient outage** — `FAILED`-duplicate replay path (Phase 5/6), generalized by async fallback (Phase 11).
-3. **Reactive/blocking mismatch (WebClient in MVC)** — Resilience4j Reactor operators + `.block()` at the boundary; documented decision.
+2. **Event stuck un-applied after transient outage** — ✅ resolved by [Addendum Fix 1](#fix-1--reconcile-non-applied-events-on-resubmission-high): resubmission reconciles `FAILED`/`RECEIVED` → `APPLIED`. Async fallback (Phase 11) would generalize this to automatic replay.
+3. **Concurrent-retry idempotency race** — ✅ resolved by [Addendum Fix 2](#fix-2--race-safe-account-side-idempotency-high): `saveAndFlush` + `DataIntegrityViolationException` → duplicate.
+4. **Reactive/blocking mismatch (WebClient in MVC)** — Resilience4j Reactor operators + `.block()` at the boundary; documented decision.
 
 ### Low Priority
-1. **Mixed-currency accounts** — out of scope; reject or document assumption (no FX in spec).
+1. **Mixed-currency accounts** — ✅ resolved by [Addendum Fix 3](#fix-3--enforce-single-currency-per-account-medium): mismatched currency rejected with `409`. (Still no FX conversion — out of scope.)
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: July 14, 2026
+**Document Version**: 1.1
+**Last Updated**: July 15, 2026
 **Author**: Adam Punnoose (planning assisted by Claude)
-**Status**: Contracts frozen — ready for implementation (Phase 2)
+**Status**: Phases 1–9 complete + post-review bug fixes applied (see Addendum). Remaining: Phase 10 (README).

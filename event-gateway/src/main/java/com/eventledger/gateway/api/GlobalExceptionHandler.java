@@ -2,7 +2,9 @@ package com.eventledger.gateway.api;
 
 import com.eventledger.gateway.exception.AccountServiceUnavailableException;
 import com.eventledger.gateway.exception.NotFoundException;
+import com.eventledger.gateway.model.DegradedResponse;
 import com.eventledger.gateway.model.ErrorResponse;
+import com.eventledger.gateway.service.EventMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
@@ -18,9 +20,11 @@ import java.time.Instant;
 public class GlobalExceptionHandler {
 
     private final MeterRegistry meterRegistry;
+    private final EventMapper eventMapper;
 
-    public GlobalExceptionHandler(MeterRegistry meterRegistry) {
+    public GlobalExceptionHandler(MeterRegistry meterRegistry, EventMapper eventMapper) {
         this.meterRegistry = meterRegistry;
+        this.eventMapper = eventMapper;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -45,9 +49,14 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(AccountServiceUnavailableException.class)
-    public ResponseEntity<ErrorResponse> handleUnavailable(AccountServiceUnavailableException ex) {
-        return build(HttpStatus.SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE",
-                ex.getMessage() + " — event stored with status FAILED; retry later.");
+    public ResponseEntity<DegradedResponse> handleUnavailable(AccountServiceUnavailableException ex) {
+        DegradedResponse body = new DegradedResponse(
+                "SERVICE_UNAVAILABLE",
+                "Account Service unavailable; event stored with status FAILED. Resubmit to retry.",
+                eventMapper.toResponse(ex.getEvent()),
+                MDC.get("traceId"),
+                Instant.now().toString());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(body);
     }
 
     @ExceptionHandler(Exception.class)

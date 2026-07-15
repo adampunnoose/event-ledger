@@ -3,6 +3,7 @@ package com.eventledger.account.service;
 import com.eventledger.account.entity.Account;
 import com.eventledger.account.entity.Transaction;
 import com.eventledger.account.entity.TxType;
+import com.eventledger.account.exception.CurrencyMismatchException;
 import com.eventledger.account.exception.NotFoundException;
 import com.eventledger.account.model.AccountDetailsResponse;
 import com.eventledger.account.model.ApplyTransactionRequest;
@@ -13,6 +14,9 @@ import com.eventledger.account.repository.AccountRepository;
 import com.eventledger.account.repository.TransactionRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +38,11 @@ public class AccountService {
     private final TransactionRepository transactionRepository;
     private final MeterRegistry meterRegistry;
 
+    /** Self-reference so the @Transactional apply is invoked through the proxy (not self-invocation). */
+    @Autowired
+    @Lazy
+    private AccountService self;
+
     public AccountService(AccountRepository accountRepository,
                           TransactionRepository transactionRepository,
                           MeterRegistry meterRegistry) {
@@ -45,34 +54,50 @@ public class AccountService {
     /**
      * Apply a transaction to an account, idempotently on {@code eventId}.
      *
-     * <p>If the eventId was already applied, this is a no-op that returns the current
-     * balance ({@code duplicate=true}) — that is what makes Gateway retries safe.
-     * Otherwise the account is upserted (auto-created on first use) and the balance is
-     * updated by a signed amount (CREDIT +, DEBIT −) in a single transaction.
+     * <p>Idempotency has two layers: a fast-path lookup for the common already-applied
+     * case, and a race-safe fallback — if two concurrent retries both pass the lookup,
+     * the unique {@code event_id} constraint lets exactly one win; the loser's
+     * {@link DataIntegrityViolationException} is caught (after its transaction rolls back)
+     * and reconciled to {@code duplicate=true} rather than surfacing as a 500.
      */
-    @Transactional
     public ApplyTransactionResponse applyTransaction(String accountId, ApplyTransactionRequest request) {
         Optional<Transaction> existing = transactionRepository.findByEventId(request.getEventId());
         if (existing.isPresent()) {
-            Account account = accountRepository.findById(existing.get().getAccountId())
-                    .orElseThrow(() -> new IllegalStateException(
-                            "Account missing for existing transaction " + request.getEventId()));
-            log.info("Duplicate transaction eventId={} — no-op, balance unchanged", request.getEventId());
-            meterRegistry.counter(METRIC, "outcome", "duplicate").increment();
-            return toResponse(account, request.getEventId(), true, true);
+            return duplicateResponse(existing.get());
         }
+        try {
+            return self.applyNewTransaction(accountId, request);
+        } catch (DataIntegrityViolationException race) {
+            // Lost the unique-constraint race — the apply committed on another thread.
+            Transaction winner = transactionRepository.findByEventId(request.getEventId())
+                    .orElseThrow(() -> race);
+            log.info("Concurrent duplicate eventId={} — reconciled to duplicate", request.getEventId());
+            return duplicateResponse(winner);
+        }
+    }
 
+    /**
+     * Applies a genuinely new transaction in one unit of work. If the {@code event_id}
+     * insert violates the unique constraint, the whole transaction (including the balance
+     * update) rolls back — so a losing concurrent retry never double-applies.
+     */
+    @Transactional
+    public ApplyTransactionResponse applyNewTransaction(String accountId, ApplyTransactionRequest request) {
         Instant now = Instant.now();
 
-        // Upsert the account FIRST so the FK on transactions.account_id is satisfied
-        // (accounts are auto-created on first transaction). saveAndFlush pins insert order.
-        Account account = accountRepository.findById(accountId).orElseGet(() -> Account.builder()
-                .accountId(accountId)
-                .balance(BigDecimal.ZERO.setScale(SCALE))
-                .currency(request.getCurrency())
-                .createdAt(now)
-                .updatedAt(now)
-                .build());
+        // Upsert the account FIRST so the FK on transactions.account_id is satisfied.
+        Account account = accountRepository.findById(accountId)
+                .map(existingAccount -> {
+                    requireSameCurrency(existingAccount, request);
+                    return existingAccount;
+                })
+                .orElseGet(() -> Account.builder()
+                        .accountId(accountId)
+                        .balance(BigDecimal.ZERO.setScale(SCALE))
+                        .currency(request.getCurrency())
+                        .createdAt(now)
+                        .updatedAt(now)
+                        .build());
 
         TxType type = TxType.valueOf(request.getType());
         BigDecimal signed = type == TxType.CREDIT ? request.getAmount() : request.getAmount().negate();
@@ -89,12 +114,32 @@ public class AccountService {
                 .eventTimestamp(request.getEventTimestamp())
                 .appliedAt(now)
                 .build();
-        transactionRepository.save(transaction);
+        // saveAndFlush forces the INSERT now: a duplicate eventId throws here and rolls back
+        // the balance change above, rather than failing silently at commit.
+        transactionRepository.saveAndFlush(transaction);
 
         log.info("Applied {} {} {} to account={} — new balance={}",
                 type, request.getAmount(), request.getCurrency(), accountId, account.getBalance());
         meterRegistry.counter(METRIC, "outcome", "applied").increment();
         return toResponse(account, request.getEventId(), true, false);
+    }
+
+    /** Reject a transaction whose currency differs from the account's (single-currency-per-account). */
+    private void requireSameCurrency(Account account, ApplyTransactionRequest request) {
+        if (account.getCurrency() != null && !account.getCurrency().equals(request.getCurrency())) {
+            throw new CurrencyMismatchException(
+                    "Account " + account.getAccountId() + " is " + account.getCurrency()
+                            + "; cannot apply a " + request.getCurrency() + " transaction");
+        }
+    }
+
+    private ApplyTransactionResponse duplicateResponse(Transaction transaction) {
+        Account account = accountRepository.findById(transaction.getAccountId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Account missing for existing transaction " + transaction.getEventId()));
+        log.info("Duplicate transaction eventId={} — no-op, balance unchanged", transaction.getEventId());
+        meterRegistry.counter(METRIC, "outcome", "duplicate").increment();
+        return toResponse(account, transaction.getEventId(), true, true);
     }
 
     @Transactional(readOnly = true)

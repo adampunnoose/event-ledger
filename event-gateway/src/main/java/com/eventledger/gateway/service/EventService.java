@@ -37,13 +37,21 @@ public class EventService {
     }
 
     public SubmitResult submitEvent(SubmitEventRequest request) {
-        // Idempotency: same eventId already seen → return the original, no re-apply.
         Optional<Event> existing = eventRepository.findById(request.getEventId());
         if (existing.isPresent()) {
-            log.info("Duplicate submission eventId={} — returning stored event (status={})",
-                    request.getEventId(), existing.get().getStatus());
-            count("duplicate");
-            return new SubmitResult(existing.get(), false);
+            Event event = existing.get();
+            if (event.getStatus() == EventStatus.APPLIED) {
+                // True idempotent replay of an already-applied event — no downstream call.
+                log.info("Duplicate submission eventId={} — already APPLIED", request.getEventId());
+                count("duplicate");
+                return new SubmitResult(event, false);
+            }
+            // RECEIVED/FAILED: a prior apply may have actually succeeded (e.g. timed-out
+            // response). Re-attempt to reconcile — safe because the Account Service is
+            // idempotent on eventId, so this cannot double-apply.
+            log.info("Resubmission of {} event {} — re-attempting apply to reconcile",
+                    event.getStatus(), request.getEventId());
+            return applyDownstream(event, request, false);
         }
 
         Event event = eventMapper.toEntity(request, EventStatus.RECEIVED, Instant.now());
@@ -56,22 +64,29 @@ public class EventService {
             count("duplicate");
             return new SubmitResult(winner, false);
         }
+        return applyDownstream(event, request, true);
+    }
 
-        // Apply downstream. Phase 6 wraps this call with Resilience4j.
+    /**
+     * Apply the event on the Account Service (wrapped with Resilience4j in {@link AccountClient}).
+     * On success the event becomes APPLIED; on failure it is retained as FAILED (graceful
+     * degradation) and a 503 is raised. {@code newlyCreated} drives 201 vs 200 at the controller.
+     */
+    private SubmitResult applyDownstream(Event event, SubmitEventRequest request, boolean newlyCreated) {
         try {
             accountClient.applyTransaction(request.getAccountId(), eventMapper.toApplyRequest(request));
             event.setStatus(EventStatus.APPLIED);
             eventRepository.save(event);
             log.info("Applied event {} for account {}", event.getEventId(), event.getAccountId());
-            count("created");
-            return new SubmitResult(event, true);
+            count(newlyCreated ? "created" : "duplicate");
+            return new SubmitResult(event, newlyCreated);
         } catch (Exception ex) {
             event.setStatus(EventStatus.FAILED);
             eventRepository.save(event);
             log.warn("Account Service apply failed for event {} — stored as FAILED: {}",
                     event.getEventId(), ex.toString());
             count("degraded");
-            throw new AccountServiceUnavailableException(event.getEventId(), ex);
+            throw new AccountServiceUnavailableException(event, ex);
         }
     }
 

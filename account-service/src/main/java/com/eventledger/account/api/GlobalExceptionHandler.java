@@ -1,5 +1,6 @@
 package com.eventledger.account.api;
 
+import com.eventledger.account.exception.CurrencyMismatchException;
 import com.eventledger.account.exception.NotFoundException;
 import com.eventledger.account.model.ErrorResponse;
 import org.slf4j.MDC;
@@ -32,6 +33,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(NotFoundException ex) {
         return build(HttpStatus.NOT_FOUND, "NOT_FOUND", ex.getMessage());
+    }
+
+    @ExceptionHandler(CurrencyMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleCurrencyMismatch(CurrencyMismatchException ex) {
+        return build(HttpStatus.CONFLICT, "CURRENCY_MISMATCH", ex.getMessage());
     }
 
     @ExceptionHandler(Exception.class)
