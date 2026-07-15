@@ -11,3 +11,9 @@ target/
 
 # Logs
 *.log
+
+# Private / not for the public submission repo:
+# the original take-home assignment and personal interview-prep notes
+ASSIGNMENT.md
+Assignment*.docx
+docs/interview-study-guide.md
