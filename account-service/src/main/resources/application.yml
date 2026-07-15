@@ -1,0 +1,32 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: account-service
+
+  datasource:
+    url: jdbc:h2:mem:accountdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  jpa:
+    hibernate:
+      ddl-auto: none            # schema owned by schema.sql, not Hibernate
+    open-in-view: false
+    defer-datasource-initialization: true
+
+  sql:
+    init:
+      mode: always              # run schema.sql on startup
+
+  jackson:
+    deserialization:
+      use-big-decimal-for-floats: true   # money never passes through double
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus

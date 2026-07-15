@@ -1,0 +1,42 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: event-gateway
+
+  # Present both spring-web (servlet) and spring-webflux (for WebClient). With both
+  # on the classpath Spring Boot starts as a servlet (Tomcat) app; WebClient is used
+  # only for the outbound Account Service call.
+  main:
+    web-application-type: servlet
+
+  datasource:
+    url: jdbc:h2:mem:eventdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  jpa:
+    hibernate:
+      ddl-auto: none            # schema owned by schema.sql, not Hibernate
+    open-in-view: false
+    defer-datasource-initialization: true
+
+  sql:
+    init:
+      mode: always              # run schema.sql on startup
+
+  jackson:
+    deserialization:
+      use-big-decimal-for-floats: true   # money never passes through double
+
+# Account Service location — overridden by env (ACCOUNT_SERVICE_BASE_URL) under Docker.
+account-service:
+  base-url: ${ACCOUNT_SERVICE_BASE_URL:http://localhost:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus

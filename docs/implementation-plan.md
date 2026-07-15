@@ -414,35 +414,46 @@ This section tracks implementation progress for each phase.
 ---
 
 ### Phase 2: Account Service Scaffold
-**Status**: Not Started
+**Status**: ✅ Completed (2026-07-14)
 
 **Completed**:
-- [ ] `pom.xml` with web/JPA/H2/actuator deps
-- [ ] Package skeleton + `application.yml` (port 8081, H2, Jackson BigDecimal)
-- [ ] `GET /health` with real DB connectivity check
+- [x] `pom.xml` with web/JPA/H2/actuator deps (Spring Boot 3.4.5, Java 21)
+- [x] Package skeleton + `application.yml` (port 8081, H2, Jackson BigDecimal)
+- [x] `GET /health` with real DB connectivity check
+- [x] `schema.sql` (accounts + transactions, from §1.6) wired via `spring.sql.init`
 
 **Remaining**:
-- All items pending
+- None
 
 **Implementation Notes**:
-- Exit criteria: `mvn -pl account-service package` green; boots; `/health` → 200 UP.
+- **Files**: `account-service/pom.xml`, `AccountServiceApplication.java`, `api/HealthController.java`, `application.yml`, `schema.sql`.
+- Parents off `spring-boot-starter-parent` independently (aggregator root `pom.xml` only lists modules — no shared code).
+- H2 in-memory (`jdbc:h2:mem:accountdb`), `ddl-auto: none` + `schema.sql` as the schema source, `defer-datasource-initialization: true`.
+- `GET /health` runs `SELECT 1` via `JdbcTemplate` → `{service, status, db, timestamp}`, `503` if the DB check fails.
+- **Verified**: builds; boots; `GET /health` → `200 {"status":"UP","db":"UP"}`.
 
 ---
 
 ### Phase 3: Event Gateway Scaffold
-**Status**: Not Started
+**Status**: ✅ Completed (2026-07-14)
 
 **Completed**:
-- [ ] `pom.xml` (web/JPA/H2/actuator + webflux for WebClient + resilience4j)
-- [ ] Package skeleton + `application.yml` (port 8080, H2, account-service base-url)
-- [ ] `WebClientConfig` bean
-- [ ] `GET /health` with real DB connectivity check
+- [x] `pom.xml` (web/JPA/H2/actuator + webflux for WebClient)
+- [x] Package skeleton + `application.yml` (port 8080, H2, account-service base-url)
+- [x] `WebClientConfig` bean
+- [x] `GET /health` with real DB connectivity check
+- [x] `schema.sql` (events, from §1.5) wired via `spring.sql.init`
 
 **Remaining**:
-- All items pending
+- None
 
 **Implementation Notes**:
-- Exit criteria: repo-root `mvn package` builds both modules; both apps boot; both `/health` → 200 UP.
+- **Files**: `event-gateway/pom.xml`, `EventGatewayApplication.java`, `api/HealthController.java`, `config/WebClientConfig.java`, `application.yml`, `schema.sql`.
+- `spring-boot-starter-webflux` added for `WebClient` only; `spring.main.web-application-type: servlet` pins it to Tomcat/MVC while keeping WebClient available.
+- `WebClientConfig` exposes an `accountServiceWebClient` bean with base URL from `account-service.base-url` (env-overridable via `ACCOUNT_SERVICE_BASE_URL` for Docker).
+- **Deviation from plan**: Resilience4j dependency deferred to Phase 6 (kept scaffold minimal / build clean); config + deps land with the resiliency work. `/actuator/prometheus` also deferred to Phase 7 (registry dependency not yet added — endpoint pre-listed in exposure only).
+- **Verified**: repo-root `mvn -T1C package` builds **both** modules; both boot; both `GET /health` → `200 {"status":"UP","db":"UP"}`.
+- Added root `.gitignore` for `target/` build output.
 
 ---
 

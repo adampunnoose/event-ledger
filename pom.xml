@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.eventledger</groupId>
+    <artifactId>event-ledger-parent</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+    <name>event-ledger</name>
+    <description>Event Ledger — aggregator POM (module build only, no shared code)</description>
+
+    <!--
+      This POM ONLY aggregates the two modules for a one-command build
+      (`mvn -q -T1C package`). It is NOT a shared parent: each service parents
+      off spring-boot-starter-parent independently and shares no code.
+    -->
+    <modules>
+        <module>account-service</module>
+        <module>event-gateway</module>
+    </modules>
+</project>
