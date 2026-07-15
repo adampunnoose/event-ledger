@@ -551,18 +551,24 @@ This section tracks implementation progress for each phase.
 ---
 
 ### Phase 8: Docker Compose & Local Run
-**Status**: Not Started
+**Status**: ✅ Completed (2026-07-15)
 
 **Completed**:
-- [ ] Dockerfile per service
-- [ ] `docker-compose.yml` (both services + optional Jaeger profile)
-- [ ] Manual run instructions
+- [x] Dockerfile per service (multi-stage)
+- [x] `docker-compose.yml` (both services; healthchecks + DNS wiring)
+- [ ] Manual run instructions (→ Phase 10 README)
+- [ ] Optional Jaeger profile (bonus — deferred; needs OTLP exporter dep)
 
 **Remaining**:
-- All items pending
+- Manual-run instructions belong in the README (Phase 10).
+- Jaeger/OTLP trace *visualization* remains a documented bonus.
 
 **Implementation Notes**:
-- Gateway reaches Account Service by Compose service-name DNS.
+- **Dockerfiles** (`account-service/Dockerfile`, `event-gateway/Dockerfile`): multi-stage — `maven:3.9-eclipse-temurin-21` build stage (`dependency:go-offline` layer for cache, then `package`), `eclipse-temurin:21-jre` runtime with `curl` for the healthcheck. **No host Maven/JDK needed** — `docker compose up --build` compiles from source. Relies on each module building standalone (parents off `spring-boot-starter-parent`, not the aggregator).
+- **`.dockerignore`** per module excludes `target/`.
+- **`docker-compose.yml`**: both services with container healthchecks (`curl -f /health`); Gateway `depends_on` account-service `condition: service_healthy`; `ACCOUNT_SERVICE_BASE_URL: http://account-service:8081` overrides the localhost default via Compose service-name DNS.
+- **Verified** (`docker compose build` + `up -d`): both containers reach **healthy** (account healthy before gateway starts, per `depends_on`); `POST /events` → 201 applied **across containers**; balance = 200.0000 on the Account Service (proves the cross-container call); `printenv` confirms the Gateway used `http://account-service:8081` (DNS, not localhost); **same `traceId` in both containers' logs** (distributed tracing works container-to-container).
+- **Jaeger bonus**: not wired — logs-only tracing keeps the default `up` clean (no exporter, no connection-refused spam). Adding it = `opentelemetry-exporter-otlp` dep + a `jaeger` service under a Compose `tracing` profile + OTLP endpoint env. Left as a documented follow-up.
 
 ---
 

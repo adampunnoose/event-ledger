@@ -1,0 +1,41 @@
+# Event Ledger — one-command startup for both services.
+#
+#   docker compose up --build
+#
+# The Gateway reaches the Account Service by its Compose service name
+# (account-service) over the private network — no hardcoded IPs.
+
+services:
+  account-service:
+    build:
+      context: ./account-service
+    image: event-ledger/account-service:1.0.0
+    container_name: account-service
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 25s
+
+  event-gateway:
+    build:
+      context: ./event-gateway
+    image: event-ledger/event-gateway:1.0.0
+    container_name: event-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      # Service-name DNS provided by Compose — overrides the localhost default.
+      ACCOUNT_SERVICE_BASE_URL: http://account-service:8081
+    depends_on:
+      account-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 25s
