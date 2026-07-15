@@ -505,19 +505,26 @@ This section tracks implementation progress for each phase.
 ---
 
 ### Phase 6: Resiliency & Graceful Degradation
-**Status**: Not Started
+**Status**: ✅ Completed (2026-07-14)
 
 **Completed**:
-- [ ] Resilience4j config (circuit breaker + retry/backoff + time limiter)
-- [ ] Operators applied to WebClient `Mono` + fallback → 503
-- [ ] Graceful degradation matrix (writes 503, local reads 200)
-- [ ] README resiliency rationale
+- [x] Resilience4j config (circuit breaker + retry w/ backoff + jitter + per-attempt timeout)
+- [x] Operators applied to WebClient `Mono` + fallback → 503
+- [x] Graceful degradation matrix (writes 503, local reads 200)
+- [ ] README resiliency rationale (deferred to Phase 10 README)
 
 **Remaining**:
-- All items pending
+- README write-up only (Phase 10).
 
 **Implementation Notes**:
-- Finalize + assert operator composition order during implementation.
+- **Deps**: `resilience4j-spring-boot3` + `resilience4j-reactor` (v2.2.0) + `spring-boot-starter-aop`, in `event-gateway/pom.xml`.
+- **Config** (`application.yml`, instance `accountService`): circuit breaker (COUNT window 10, min 5 calls, 50% threshold, 5s open-state, 2 half-open probes, auto half-open, health indicator on); retry (3 attempts, 200ms base, exponential ×2, randomized jitter, **ignores `CallNotPermittedException`** so it fast-fails when open); timeout via `account-service.call-timeout: 2s`.
+- **Composition** (`AccountClient`): `retry ( circuitBreaker ( Mono.timeout ( call ) ) )` — retry outermost drives attempts, breaker records each attempt, each attempt has its own timeout. Used Reactor `Mono.timeout()` for the per-attempt limit (resilience4j `TimeLimiter` targets `CompletableFuture`, not Reactor) — small, documented deviation from the plan's yaml sketch.
+- **Fallback**: any failure (timeout / connection / 5xx / open circuit) propagates from `.block()` → `EventService` sets event FAILED → `AccountServiceUnavailableException` → HTTP 503.
+- **Actuator**: `/actuator/circuitbreakers` + `circuitbreakerevents` exposed; breaker state also surfaced in `/actuator/health`.
+- **Verified** (curl, Account Service killed): full lifecycle **CLOSED → OPEN → HALF_OPEN → CLOSED**. Timing proves it — POST #1 `503` in 720ms (3 retries + backoff), breaker trips, subsequent POSTs `503` in **~5ms** (fast-fail, no network call); after the 5s cool-off the breaker auto-moved to HALF_OPEN and 2 successful probes (201) closed it. Local reads (`GET /events/{id}`, `?account=`) and Gateway `/health` stayed `200` throughout.
+- **Not yet exercised live**: the *slow-response* timeout path (vs. connection-refused). Configured and will be asserted in Phase 9 with a delayed WireMock stub.
+- **Bulkhead**: intentionally not built — documented as considered-and-deferred (see interview-study-guide Topic 3); cheap to add if time allows.
 
 ---
 
